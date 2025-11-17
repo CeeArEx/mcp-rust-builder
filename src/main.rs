@@ -26,6 +26,12 @@ pub struct RustBuilderServer {
     tool_router: ToolRouter<Self>,
 }
 
+impl Default for RustBuilderServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize, JsonSchema)]
 struct SearchDocsRequest {
     #[schemars(description = "Suchbegriff (z.B. 'Vec', 'HashMap', 'async')")]
@@ -157,14 +163,8 @@ async fn main() -> anyhow::Result<()> {
     let server = RustBuilderServer::new();
 
     eprintln!("MCP Rust Builder Server gestartet!");
-    eprintln!("Verfügbare Tools:");
-    eprintln!("  - search_rust_docs");
-    eprintln!("  - get_crate_info");
-    eprintln!("  - get_installation_status");
 
-    // Starte Server mit stdio Transport
-    let transport = (stdin(), stdout());
-    server.serve(transport).await?;
+    server.serve((stdin(), stdout())).await?.waiting().await?;
 
     Ok(())
 }
