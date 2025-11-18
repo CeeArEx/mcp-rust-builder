@@ -1,6 +1,7 @@
 mod tools;
 mod utils;
 
+use std::path::PathBuf;
 use rmcp::schemars;
 use rmcp::{
     handler::server::tool::ToolRouter,
@@ -13,7 +14,7 @@ use rmcp::{
     ServerHandler,
 };
 use serde::{Deserialize};
-use tools::{CrateInfoProvider, RustDocsSearcher};
+use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager};
 use utils::RustPaths;
 use std::sync::Arc;
 use tokio::io::{stdin, stdout};
@@ -23,6 +24,9 @@ pub struct RustBuilderServer {
     paths: Arc<RustPaths>,
     docs_searcher: Arc<Option<RustDocsSearcher>>,
     crate_provider: Arc<Option<CrateInfoProvider>>,
+    checker: Arc<CargoChecker>,
+    explainer: Arc<ErrorExplainer>,
+    project_manager: Arc<ProjectManager>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -44,6 +48,24 @@ struct GetCrateInfoRequest {
     crate_name: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct CheckCodeRequest {
+    #[schemars(description = "Absoluter Pfad zum Rust-Projekt")]
+    path: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ExplainRequest {
+    #[schemars(description = "Fehlercode (z.B. 'E0308')")]
+    error_code: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct StructureRequest {
+    #[schemars(description = "Absoluter Pfad zum Projekt-Root")]
+    path: String,
+}
+
 #[tool_router]
 impl RustBuilderServer {
     fn new() -> Self {
@@ -54,12 +76,17 @@ impl RustBuilderServer {
         // Initialisiere Tools
         let docs_searcher = paths.docs_path.clone().map(|p| RustDocsSearcher::new(p));
         let crate_provider = paths.cargo_registry.clone().map(|p| CrateInfoProvider::new(p));
+        let checker = CargoChecker::new();
+
 
         Self {
             paths: Arc::new(paths),
             docs_searcher: Arc::new(docs_searcher),
             crate_provider: Arc::new(crate_provider),
-            tool_router: Self::tool_router(),  // ← WICHTIG!
+            checker: Arc::new(CargoChecker::new()),
+            explainer: Arc::new(ErrorExplainer::new()),
+            project_manager: Arc::new(ProjectManager::new()),
+            tool_router: Self::tool_router(),
         }
     }
 
@@ -142,6 +169,86 @@ impl RustBuilderServer {
             serde_json::to_string_pretty(&response).unwrap()
         )]))
     }
+
+    #[tool(description = "Führt 'cargo check' aus und gibt Compiler-Fehler zurück")]
+    async fn check_code(&self, params: Parameters<CheckCodeRequest>) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(params.0.path);
+
+        // 1. Security & Sanity Check
+        if !path.exists() {
+            return Err(McpError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("Der Pfad '{}' existiert nicht. Bitte prüfe die Struktur mit 'get_project_structure'.", path.display()),
+                None
+            ));
+        }
+
+        // 2. Run the check
+        let result = self.checker.check(path)
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        // 3. Construct response with summary (Best of both worlds)
+        let response = serde_json::json!({
+        "status": if result.success { "success" } else { "error" },
+        "issue_count": result.messages.len(), // Very helpful for the AI
+        "issues": result.messages             // The raw data
+    });
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&response).unwrap()
+        )]))
+    }
+
+    #[tool(description = "Erklärt einen Rust-Fehlercode (z.B. E0308). Nutze dies, wenn 'check_code' einen Fehlercode zurückgibt.")]
+    async fn explain_error(&self, params: Parameters<ExplainRequest>) -> Result<CallToolResult, McpError> {
+        // POLISH 1: Normalize input (remove whitespace, force uppercase)
+        let raw_code = params.0.error_code.trim().to_uppercase();
+
+        // POLISH 2: Basic validation before calling the internal tool
+        if !raw_code.starts_with('E') {
+            return Err(McpError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("Der Fehlercode '{}' ist ungültig. Er muss mit 'E' beginnen (z.B. E0308).", raw_code),
+                None
+            ));
+        }
+
+        let explanation = self.explainer.explain(&raw_code)
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        // POLISH 3: Return plain text (Markdown)
+        // The output from rustc --explain is usually Markdown-compatible.
+        Ok(CallToolResult::success(vec![Content::text(explanation)]))
+    }
+
+    #[tool(description = "Zeigt die Dateistruktur eines Projekts an (ignoriert target/ und .git/).")]
+    async fn get_project_structure(&self, params: Parameters<StructureRequest>) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(params.0.path);
+
+        // POLISH 1: Path Existence Check (Fail Fast)
+        if !path.exists() {
+            return Err(McpError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("Der Pfad '{}' wurde nicht gefunden.", path.display()),
+                None
+            ));
+        }
+
+        // POLISH 2: Directory Check
+        if !path.is_dir() {
+            return Err(McpError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!("Der Pfad '{}' ist eine Datei, kein Ordner. Bitte gib das Wurzelverzeichnis des Projekts an.", path.display()),
+                None
+            ));
+        }
+
+        let structure = self.project_manager.get_structure(path)
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(structure)]))
+    }
+
 }
 
 #[tool_handler]

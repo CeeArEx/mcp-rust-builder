@@ -32,19 +32,19 @@ impl CargoChecker {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         let mut messages = Vec::new();
-        let mut success = output.status.success();
+        let success = output.status.success();
 
-        // 2. Parse the JSON stream (cargo outputs one JSON object per line)
+        // 2. Parse the JSON stream
         for line in stdout.lines() {
+            // Skip non-JSON lines
+            if !line.starts_with('{') { continue; }
+
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                // We focus on "compiler-message" types
                 if json["reason"] == "compiler-message" {
                     if let Some(msg) = json.get("message") {
                         let level = msg["level"].as_str().unwrap_or("unknown").to_string();
 
-                        // Filter out generic info, keep warnings and errors
                         if level == "error" || level == "warning" {
-                            // Extract primary span (location)
                             let (file, line) = if let Some(spans) = msg["spans"].as_array() {
                                 if let Some(first) = spans.first() {
                                     (
@@ -67,12 +67,12 @@ impl CargoChecker {
             }
         }
 
-        // Fallback: If cargo failed but produced no JSON messages (e.g., Cargo.toml error)
+        // Fallback for non-JSON errors (like missing Cargo.toml)
         if !success && messages.is_empty() {
             messages.push(CompilerMessage {
                 level: "error".to_string(),
                 message: stderr.to_string(),
-                file: Some("Cargo.toml".to_string()), // Assumption
+                file: Some("Cargo.toml".to_string()),
                 line: None,
                 code: None,
             });

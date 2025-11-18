@@ -1,9 +1,11 @@
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use serde::{Serialize, Deserialize};
 use anyhow::Result;
+use std::time::Instant;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DocSearchResult {
@@ -13,12 +15,20 @@ pub struct DocSearchResult {
     pub relevance_score: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct IndexedDocument {
     path: String,
     title: String,
     description: String,
     term_frequencies: HashMap<String, f64>,
+}
+
+// A wrapper struct for the cache file to verify versioning
+#[derive(Serialize, Deserialize)]
+struct CacheContainer {
+    docs_path_hash: u64, // Used to invalidate cache if docs path changes
+    documents: Vec<IndexedDocument>,
+    idf: HashMap<String, f64>,
 }
 
 pub struct RustDocsSearcher {
@@ -38,14 +48,79 @@ impl RustDocsSearcher {
             inverse_document_frequency: HashMap::new(),
         };
 
-        // Attempt to build the index, but don't fail construction if it errors.
-        // Log the error instead, allowing the server to start.
-        // The search will just return no results.
+        // 1. Try to load from cache first
+        if let Ok(true) = searcher.load_from_cache() {
+            return searcher;
+        }
+
+        // 2. If cache failed or missing, build fresh index
         if let Err(e) = searcher.build_index() {
             eprintln!("[RustDocsSearcher] Failed to build search index: {}. Search will be unavailable.", e);
+        } else {
+            // 3. Save to cache for next time
+            if let Err(e) = searcher.save_to_cache() {
+                eprintln!("[RustDocsSearcher] Warning: Failed to save cache: {}", e);
+            }
         }
 
         searcher
+    }
+
+    /// Returns the path to the cache file (e.g., /tmp/mcp_rust_docs.bin)
+    fn get_cache_path() -> PathBuf {
+        std::env::temp_dir().join("mcp_rust_docs_v1.bin")
+    }
+
+    /// Generates a simple hash of the docs path to ensure we are caching the correct version
+    fn get_path_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        self.docs_path.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Loads the index from disk significantly faster than parsing HTML
+    fn load_from_cache(&mut self) -> Result<bool> {
+        let cache_path = Self::get_cache_path();
+        if !cache_path.exists() {
+            return Ok(false);
+        }
+
+        let start = Instant::now();
+        let file = File::open(&cache_path)?;
+        let reader = BufReader::new(file);
+
+        let cache: CacheContainer = bincode::deserialize_from(reader)?;
+
+        // Verify that the cache belongs to the current docs path
+        if cache.docs_path_hash != self.get_path_hash() {
+            eprintln!("[RustDocsSearcher] Cache outdated (docs path changed). Rebuilding...");
+            return Ok(false);
+        }
+
+        self.documents = cache.documents;
+        self.inverse_document_frequency = cache.idf;
+
+        eprintln!("[RustDocsSearcher] Loaded index from cache in {:.2}s", start.elapsed().as_secs_f64());
+        Ok(true)
+    }
+
+    /// Saves the built index to disk
+    fn save_to_cache(&self) -> Result<()> {
+        let cache_path = Self::get_cache_path();
+        let file = File::create(cache_path)?;
+        let writer = BufWriter::new(file);
+
+        let container = CacheContainer {
+            docs_path_hash: self.get_path_hash(),
+            documents: self.documents.clone(),
+            idf: self.inverse_document_frequency.clone(),
+        };
+
+        bincode::serialize_into(writer, &container)?;
+        eprintln!("[RustDocsSearcher] Index saved to cache.");
+        Ok(())
     }
 
     /// Searches the pre-built index using a TF-IDF scoring model.
@@ -84,6 +159,7 @@ impl RustDocsSearcher {
 
     /// Iterates through all HTML files and builds the TF and IDF tables.
     fn build_index(&mut self) -> Result<()> {
+        let start = Instant::now();
         eprintln!("[RustDocsSearcher] Building search index... this may take a moment.");
         let mut all_html_files = Vec::new();
         // We only search the `std` docs for now to keep it focused and fast
@@ -96,12 +172,18 @@ impl RustDocsSearcher {
         }
         let mut doc_counts: HashMap<String, usize> = HashMap::new();
 
+        // Counter for progress
+        let mut processed = 0;
         for file_path in &all_html_files {
             if let Ok(Some(indexed_doc)) = self.process_html_file(file_path) {
                 for term in indexed_doc.term_frequencies.keys() {
                     *doc_counts.entry(term.clone()).or_insert(0) += 1;
                 }
                 self.documents.push(indexed_doc);
+            }
+            processed += 1;
+            if processed % 500 == 0 {
+                // Beware of the protocol
             }
         }
 
@@ -110,7 +192,7 @@ impl RustDocsSearcher {
             self.inverse_document_frequency.insert(term, idf);
         }
 
-        eprintln!("[RustDocsSearcher] Index built successfully. {} documents indexed.", self.documents.len());
+        eprintln!("[RustDocsSearcher] Index built in {:.2}s. {} documents indexed.", start.elapsed().as_secs_f64(), self.documents.len());
         Ok(())
     }
 
@@ -135,6 +217,8 @@ impl RustDocsSearcher {
 
         let title_selector = Selector::parse("h1.fqn, h1.main-heading").unwrap();
         let desc_selector = Selector::parse(".docblock p").unwrap();
+
+        // Should I remove the main-content for performance? -> Maybe something for later...
         let main_content_selector = Selector::parse("#main-content").unwrap();
 
         let title = document.select(&title_selector).next()
