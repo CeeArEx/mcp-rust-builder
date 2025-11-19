@@ -14,7 +14,8 @@ use rmcp::{
     ServerHandler,
 };
 use serde::{Deserialize};
-use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager};
+use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
+            DependencyManager, FileSurgeon};
 use utils::RustPaths;
 use std::sync::Arc;
 use tokio::io::{stdin, stdout};
@@ -27,6 +28,8 @@ pub struct RustBuilderServer {
     checker: Arc<CargoChecker>,
     explainer: Arc<ErrorExplainer>,
     project_manager: Arc<ProjectManager>,
+    dep_manager: Arc<DependencyManager>,
+    surgeon: Arc<FileSurgeon>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -66,6 +69,26 @@ struct StructureRequest {
     path: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct AddDepRequest {
+    #[schemars(description = "Absoluter Pfad zum Projekt-Root (wo Cargo.toml liegt)")]
+    project_path: String,
+    #[schemars(description = "Name der Crate (z.B. 'axum')")]
+    crate_name: String,
+    #[schemars(description = "Optionale Features (z.B. ['macros', 'rt-multi-thread'])")]
+    features: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct PatchFileRequest {
+    #[schemars(description = "Absoluter Pfad zur Datei")]
+    path: String,
+    #[schemars(description = "Der exakte Code-Abschnitt, der ersetzt werden soll")]
+    original_snippet: String,
+    #[schemars(description = "Der neue Code, der eingefügt wird")]
+    modified_snippet: String,
+}
+
 #[tool_router]
 impl RustBuilderServer {
     fn new() -> Self {
@@ -86,6 +109,8 @@ impl RustBuilderServer {
             checker: Arc::new(CargoChecker::new()),
             explainer: Arc::new(ErrorExplainer::new()),
             project_manager: Arc::new(ProjectManager::new()),
+            dep_manager: Arc::new(DependencyManager::new()),
+            surgeon: Arc::new(FileSurgeon::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -247,6 +272,31 @@ impl RustBuilderServer {
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(structure)]))
+    }
+
+    #[tool(description = "Fügt einem Projekt eine Dependency via 'cargo add' hinzu.")]
+    async fn add_dependency(&self, params: Parameters<AddDepRequest>) -> Result<CallToolResult, McpError> {
+        let AddDepRequest { project_path, crate_name, features } = params.0;
+        let path = PathBuf::from(project_path);
+
+        // Logic delegated to tool module for separation of concerns
+        let result = self.dep_manager.add_dependency(path, &crate_name, features)
+            .await
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Patcht eine Datei durch Suchen und Ersetzen (File Surgeon). Sicherer als komplettes Überschreiben. Pfade müssen immer die Datei beinhalten, also z.B. \"/home/.../.../tools/test.rs\"")]
+    async fn patch_file(&self, params: Parameters<PatchFileRequest>) -> Result<CallToolResult, McpError> {
+        let PatchFileRequest { path, original_snippet, modified_snippet } = params.0;
+        let file_path = PathBuf::from(path);
+
+        let result = self.surgeon.patch_file(file_path, &original_snippet, &modified_snippet)
+            .await
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
     }
 
 }
