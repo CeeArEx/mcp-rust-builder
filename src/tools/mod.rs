@@ -5,6 +5,9 @@ pub mod explain;
 pub mod project;
 pub mod dependencies;
 pub mod surgeon;
+pub mod testing;
+pub mod scaffolder;
+pub mod patterns;
 
 pub use search_docs::RustDocsSearcher;
 pub use crate_info::CrateInfoProvider;
@@ -13,3 +16,6 @@ pub use explain::ErrorExplainer;
 pub use project::ProjectManager;
 pub use dependencies::DependencyManager;
 pub use surgeon::FileSurgeon;
+pub use testing::TestRunner;
+pub use scaffolder::McpToolScaffolder;
+pub use patterns::McpPatterns;

@@ -15,7 +15,7 @@ use rmcp::{
 };
 use serde::{Deserialize};
 use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
-            DependencyManager, FileSurgeon};
+            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns};
 use utils::RustPaths;
 use std::sync::Arc;
 use tokio::io::{stdin, stdout};
@@ -30,6 +30,9 @@ pub struct RustBuilderServer {
     project_manager: Arc<ProjectManager>,
     dep_manager: Arc<DependencyManager>,
     surgeon: Arc<FileSurgeon>,
+    test_runner: Arc<TestRunner>,
+    scaffolder: Arc<McpToolScaffolder>,
+    patterns: Arc<McpPatterns>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -89,6 +92,32 @@ struct PatchFileRequest {
     modified_snippet: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct RunTestsRequest {
+    #[schemars(description = "Absoluter Pfad zum Projekt-Root")]
+    path: String,
+    #[schemars(description = "Optionaler Filter: Name des Tests oder Moduls (z.B. 'tests::my_test')")]
+    filter: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ScaffoldToolRequest {
+    #[schemars(description = "Absoluter Pfad zum Projekt-Root")]
+    project_path: String,
+    #[schemars(description = "Name des Tools in snake_case (z.B. 'run_tests')")]
+    tool_name: String,
+    #[schemars(description = "Name des Structs in PascalCase (z.B. 'TestRunner')")]
+    struct_name: String,
+    #[schemars(description = "Kurze Beschreibung, was das Tool tut")]
+    description: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct GetPatternRequest {
+    #[schemars(description = "The topic to get a template for: 'tool', 'prompt', 'resource', or 'server_setup'")]
+    topic: String,
+}
+
 #[tool_router]
 impl RustBuilderServer {
     fn new() -> Self {
@@ -99,7 +128,6 @@ impl RustBuilderServer {
         // Initialisiere Tools
         let docs_searcher = paths.docs_path.clone().map(|p| RustDocsSearcher::new(p));
         let crate_provider = paths.cargo_registry.clone().map(|p| CrateInfoProvider::new(p));
-        let checker = CargoChecker::new();
 
 
         Self {
@@ -111,6 +139,9 @@ impl RustBuilderServer {
             project_manager: Arc::new(ProjectManager::new()),
             dep_manager: Arc::new(DependencyManager::new()),
             surgeon: Arc::new(FileSurgeon::new()),
+            test_runner: Arc::new(TestRunner::new()),
+            scaffolder: Arc::new(McpToolScaffolder::new()),
+            patterns: Arc::new(McpPatterns::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -297,6 +328,42 @@ impl RustBuilderServer {
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Führt 'cargo test' aus. Nutze dies, um Code-Änderungen zu verifizieren.")]
+    async fn run_tests(&self, params: Parameters<RunTestsRequest>) -> Result<CallToolResult, McpError> {
+        let RunTestsRequest { path, filter } = params.0;
+        let project_path = PathBuf::from(path);
+
+        let output = self.test_runner.run(project_path, filter)
+            .await
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        // We return the output as text so the LLM can read the assertions
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    #[tool(description = "Erstellt das Grundgerüst für ein neues MCP Tool (Datei erstellen + mod.rs update). Gibt Anweisungen für main.rs zurück.")]
+    async fn scaffold_new_tool(&self, params: Parameters<ScaffoldToolRequest>) -> Result<CallToolResult, McpError> {
+        let ScaffoldToolRequest { project_path, tool_name, struct_name, description } = params.0;
+
+        let result = self.scaffolder.create_tool(
+            PathBuf::from(project_path),
+            tool_name,
+            struct_name,
+            description
+        ).await.map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Returns verified code templates for `rmcp` (Tools, Prompts, Resources). Use this to avoid syntax hallucinations.")]
+    async fn get_mcp_template(&self, params: Parameters<GetPatternRequest>) -> Result<CallToolResult, McpError> {
+        let topic = params.0.topic.to_lowercase();
+        let template = self.patterns.get_template(&topic)
+            .map_err(|e| McpError::new(ErrorCode::INVALID_PARAMS, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(template)]))
     }
 
 }
