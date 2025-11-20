@@ -1,6 +1,7 @@
 mod tools;
 mod utils;
 
+use rmcp::RoleServer;
 use std::path::PathBuf;
 use rmcp::schemars;
 use rmcp::{
@@ -8,16 +9,20 @@ use rmcp::{
     handler::server::wrapper::Parameters,
     model::*,
     tool, tool_router, tool_handler,
+    prompt, prompt_router, prompt_handler,
     schemars::JsonSchema,
     ErrorData as McpError,
     ServiceExt,
     ServerHandler,
 };
+use rmcp::service::RequestContext;
 use serde::{Deserialize};
 use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
             DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher};
+use tools::manual::SYSTEM_INSTRUCTIONS;
 use utils::RustPaths;
 use std::sync::Arc;
+use rmcp::handler::server::router::prompt::PromptRouter;
 use tokio::io::{stdin, stdout};
 
 #[derive(Clone)]
@@ -35,6 +40,7 @@ pub struct RustBuilderServer {
     patterns: Arc<McpPatterns>,
     git: Arc<GitController>,
     polisher: Arc<CodePolisher>,
+    prompt_router: PromptRouter<Self>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -138,6 +144,22 @@ struct PolishRequest {
     mode: String,
 }
 
+// --- Prompt Router ---
+#[prompt_router]
+impl RustBuilderServer {
+    #[prompt(name = "agent_instructions", description = "The official manual for using this MCP server. Load this into the context at the start of a session.")]
+    async fn get_instructions(&self) -> Result<Vec<PromptMessage>, McpError> {
+        let message = PromptMessage {
+            role: PromptMessageRole::User,
+            content: PromptMessageContent::Text {
+                text: SYSTEM_INSTRUCTIONS.to_string()
+            }
+        };
+
+        Ok(vec![message])
+    }
+}
+
 #[tool_router]
 impl RustBuilderServer {
     fn new() -> Self {
@@ -163,6 +185,7 @@ impl RustBuilderServer {
             patterns: Arc::new(McpPatterns::new()),
             git: Arc::new(GitController::new()),
             polisher: Arc::new(CodePolisher::new()),
+            prompt_router: Self::prompt_router(),
             tool_router: Self::tool_router(),
         }
     }
@@ -251,7 +274,6 @@ impl RustBuilderServer {
     async fn check_code(&self, params: Parameters<CheckCodeRequest>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(params.0.path);
 
-        // 1. Security & Sanity Check
         if !path.exists() {
             return Err(McpError::new(
                 ErrorCode::INVALID_PARAMS,
@@ -260,15 +282,13 @@ impl RustBuilderServer {
             ));
         }
 
-        // 2. Run the check
         let result = self.checker.check(path)
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
-        // 3. Construct response with summary (Best of both worlds)
         let response = serde_json::json!({
             "status": if result.success { "success" } else { "error" },
-            "issue_count": result.messages.len(), // Very helpful for the AI
-            "issues": result.messages             // The raw data
+            "issue_count": result.messages.len(),
+            "issues": result.messages
         });
 
         Ok(CallToolResult::success(vec![Content::text(
@@ -278,10 +298,8 @@ impl RustBuilderServer {
 
     #[tool(description = "Explains a Rust error code (e.g., E0308). Use this when 'check_code' returns an error code.")]
     async fn explain_error(&self, params: Parameters<ExplainRequest>) -> Result<CallToolResult, McpError> {
-        // POLISH 1: Normalize input (remove whitespace, force uppercase)
         let raw_code = params.0.error_code.trim().to_uppercase();
 
-        // POLISH 2: Basic validation before calling the internal tool
         if !raw_code.starts_with('E') {
             return Err(McpError::new(
                 ErrorCode::INVALID_PARAMS,
@@ -293,7 +311,6 @@ impl RustBuilderServer {
         let explanation = self.explainer.explain(&raw_code)
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
-        // POLISH 3: Return plain text (Markdown)
         Ok(CallToolResult::success(vec![Content::text(explanation)]))
     }
 
@@ -301,7 +318,6 @@ impl RustBuilderServer {
     async fn get_project_structure(&self, params: Parameters<StructureRequest>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(params.0.path);
 
-        // POLISH 1: Path Existence Check (Fail Fast)
         if !path.exists() {
             return Err(McpError::new(
                 ErrorCode::INVALID_PARAMS,
@@ -310,7 +326,6 @@ impl RustBuilderServer {
             ));
         }
 
-        // POLISH 2: Directory Check
         if !path.is_dir() {
             return Err(McpError::new(
                 ErrorCode::INVALID_PARAMS,
@@ -330,7 +345,6 @@ impl RustBuilderServer {
         let AddDepRequest { project_path, crate_name, features } = params.0;
         let path = PathBuf::from(project_path);
 
-        // Logic delegated to tool module for separation of concerns
         let result = self.dep_manager.add_dependency(path, &crate_name, features)
             .await
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
@@ -359,7 +373,6 @@ impl RustBuilderServer {
             .await
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
-        // We return the output as text so the LLM can read the assertions
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -422,10 +435,14 @@ impl RustBuilderServer {
 }
 
 #[tool_handler]
+#[prompt_handler]
 impl ServerHandler for RustBuilderServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
                 "Simple server for creating MCP (Model Context Protocol) Servers in Rust".to_string(),
