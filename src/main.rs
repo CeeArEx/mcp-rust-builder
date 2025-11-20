@@ -15,7 +15,7 @@ use rmcp::{
 };
 use serde::{Deserialize};
 use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
-            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns};
+            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher};
 use utils::RustPaths;
 use std::sync::Arc;
 use tokio::io::{stdin, stdout};
@@ -33,6 +33,8 @@ pub struct RustBuilderServer {
     test_runner: Arc<TestRunner>,
     scaffolder: Arc<McpToolScaffolder>,
     patterns: Arc<McpPatterns>,
+    git: Arc<GitController>,
+    polisher: Arc<CodePolisher>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -118,6 +120,24 @@ struct GetPatternRequest {
     topic: String,
 }
 
+#[derive(Deserialize, JsonSchema)]
+struct GitRequest {
+    #[schemars(description = "Project root path")]
+    path: String,
+    #[schemars(description = "Operation: 'status', 'diff', 'commit', 'undo'")]
+    operation: String,
+    #[schemars(description = "Commit message (required for 'commit')")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct PolishRequest {
+    #[schemars(description = "Project root path")]
+    path: String,
+    #[schemars(description = "Mode: 'fmt' (Format code) or 'clippy' (Check for lint errors). Note: Clippy does NOT auto-fix.")]
+    mode: String,
+}
+
 #[tool_router]
 impl RustBuilderServer {
     fn new() -> Self {
@@ -142,6 +162,8 @@ impl RustBuilderServer {
             test_runner: Arc::new(TestRunner::new()),
             scaffolder: Arc::new(McpToolScaffolder::new()),
             patterns: Arc::new(McpPatterns::new()),
+            git: Arc::new(GitController::new()),
+            polisher: Arc::new(CodePolisher::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -366,6 +388,39 @@ impl RustBuilderServer {
         Ok(CallToolResult::success(vec![Content::text(template)]))
     }
 
+    #[tool(description = "Manages version control. Use 'commit' to save progress, and 'undo' to revert the last edit if it broke the build.")]
+    async fn git_operations(&self, params: Parameters<GitRequest>) -> Result<CallToolResult, McpError> {
+        let GitRequest { path, operation, message } = params.0;
+        let path_buf = PathBuf::from(path);
+
+        let result = match operation.as_str() {
+            "status" => self.git.status(path_buf).await,
+            "diff" => self.git.diff(path_buf).await,
+            "undo" => self.git.undo(path_buf).await,
+            "commit" => {
+                let msg = message.unwrap_or_else(|| "WIP: Auto-commit".to_string());
+                self.git.commit(path_buf, msg).await
+            },
+            _ => Err(anyhow::anyhow!("Unknown git operation. Use status, diff, commit, or undo.")),
+        };
+
+        let text = result.map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(description = "Checks code quality. 'fmt' cleans up whitespace (Safe). 'clippy' reports lints/errors but does NOT change code (Safe).")]
+    async fn polish_code(&self, params: Parameters<PolishRequest>) -> Result<CallToolResult, McpError> {
+        let path_buf = PathBuf::from(params.0.path);
+
+        let result = match params.0.mode.as_str() {
+            "fmt" => self.polisher.run_fmt(path_buf).await,
+            "clippy" => self.polisher.run_clippy(path_buf).await,
+            _ => Err(anyhow::anyhow!("Unknown polish mode. Use 'fmt' or 'clippy'")),
+        };
+
+        let text = result.map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
 }
 
 #[tool_handler]
