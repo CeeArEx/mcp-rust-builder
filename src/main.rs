@@ -101,6 +101,12 @@ struct PatchFileRequest {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct ReadFileRequest {
+    #[schemars(description = "Absolute path to the file")]
+    path: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct RunTestsRequest {
     #[schemars(description = "Absolute path to the project root")]
     path: String,
@@ -205,6 +211,7 @@ impl RustBuilderServer {
             ))?;
 
         let results = searcher.search(&query)
+            .await
             .map_err(|e| McpError::new(ErrorCode::PARSE_ERROR, e.to_string(), None))?;
 
         let json_results = serde_json::to_value(&results)
@@ -350,6 +357,27 @@ impl RustBuilderServer {
             .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
+
+    #[tool(description = "Reads a file and adds line numbers. Use this BEFORE `patch_file` to ensure you have the exact syntax.")]
+    async fn read_file(&self, params: Parameters<ReadFileRequest>) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(params.0.path);
+
+        if !path.exists() {
+            return Err(McpError::new(ErrorCode::INVALID_PARAMS, format!("File not found: {}", path.display()), None));
+        }
+
+        let content = tokio::fs::read_to_string(&path).await
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        // Add line numbers for the AI
+        let numbered_lines: String = content.lines()
+            .enumerate()
+            .map(|(i, line)| format!("{:04} | {}", i + 1, line))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(CallToolResult::success(vec![Content::text(numbered_lines)]))
     }
 
     #[tool(description = "Patches a file using search and replace (File Surgeon). More secure than complete overwriting. Paths must always include the file, e.g., \"/home/.../.../tools/test.rs\".")]
