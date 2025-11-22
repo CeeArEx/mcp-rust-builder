@@ -11,6 +11,7 @@ pub mod patterns;
 pub mod git;
 pub mod formatting;
 pub mod manual;
+pub mod analyzer;
 
 pub use search_docs::RustDocsSearcher;
 pub use crate_info::CrateInfoProvider;
@@ -25,3 +26,4 @@ pub use patterns::McpPatterns;
 pub use git::GitController;
 pub use formatting::CodePolisher;
 pub use manual::SYSTEM_INSTRUCTIONS;
+pub use analyzer::SymbolAnalyzer;

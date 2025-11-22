@@ -22,8 +22,8 @@ use std::sync::Arc;
 use rmcp::handler::server::router::prompt::PromptRouter;
 use tokio::io::{stdin, stdout};
 
-use crate::tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
-            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher};
+use crate::tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager, DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher, SymbolAnalyzer};
+use crate::tools::analyzer::AnalyzeRequest;
 use crate::tools::manual::SYSTEM_INSTRUCTIONS;
 use crate::tools::search_docs::SearchDocsRequest;
 use crate::tools::cargo_check::CheckCodeRequest;
@@ -53,6 +53,7 @@ pub struct RustBuilderServer {
     git: Arc<GitController>,
     polisher: Arc<CodePolisher>,
     prompt_router: PromptRouter<Self>,
+    analyzer: Arc<SymbolAnalyzer>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -121,6 +122,7 @@ impl RustBuilderServer {
             git: Arc::new(GitController::new()),
             polisher: Arc::new(CodePolisher::new()),
             prompt_router: Self::prompt_router(),
+            analyzer: Arc::new(SymbolAnalyzer::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -389,6 +391,18 @@ impl RustBuilderServer {
         let text = result.map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
         Ok(CallToolResult::success(vec![Content::text(text)]))
     }
+
+    #[tool(description = "Parses a Rust file and returns a high-level outline (structs, fields, function signatures) ignoring function bodies. Use this to understand large files quickly.")]
+    async fn analyze_code(&self, params: Parameters<AnalyzeRequest>) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(params.0.path);
+        let outline = self.analyzer.analyze(path)
+            .await
+            .map_err(|e| McpError::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+
+        Ok(CallToolResult::success(vec![Content::text(outline)]))
+    }
+
+
 }
 
 #[tool_handler]
