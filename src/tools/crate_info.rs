@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use rmcp::schemars::JsonSchema;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetCrateInfoRequest {
+    #[schemars(description = "Name of the crate (e.g., 'serde', 'tokio', 'rmcp')")]
+    pub crate_name: String,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CrateInfo {

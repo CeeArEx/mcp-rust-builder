@@ -2,6 +2,17 @@
 use std::path::PathBuf;
 use tokio::process::Command;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
+use::rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct RunTestsRequest {
+    #[schemars(description = "Absolute path to the project root")]
+    pub path: String,
+    #[schemars(description = "Optional filter: Name of the test or module (e.g., 'tests::my_test')")]
+    pub filter: Option<String>,
+}
 
 pub struct TestRunner;
 

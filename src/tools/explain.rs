@@ -1,6 +1,15 @@
 use std::process::Command;
 use anyhow::Result;
 use regex::Regex;
+use rmcp::schemars::JsonSchema;
+use rmcp::schemars;
+use serde::Deserialize;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ExplainRequest {
+    #[schemars(description = "Error code (e.g., 'E0308')")]
+    pub error_code: String,
+}
 
 pub struct ErrorExplainer;
 

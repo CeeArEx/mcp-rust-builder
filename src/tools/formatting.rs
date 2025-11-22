@@ -1,6 +1,17 @@
 use std::path::PathBuf;
 use tokio::process::Command;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PolishRequest {
+    #[schemars(description = "Project root path")]
+    pub path: String,
+    #[schemars(description = "Mode: 'fmt' (Format code) or 'clippy' (Check for lint errors). Note: Clippy does NOT auto-fix.")]
+    pub mode: String,
+}
 
 pub struct CodePolisher;
 

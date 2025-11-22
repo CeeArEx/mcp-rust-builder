@@ -1,7 +1,20 @@
 // src/tools/dependencies.rs
 use std::path::PathBuf;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
 use tokio::process::Command;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct AddDepRequest {
+    #[schemars(description = "Absolute path to the project root (where Cargo.toml is located)")]
+    pub project_path: String,
+    #[schemars(description = "Name of the crate (e.g., 'axum')")]
+    pub crate_name: String,
+    #[schemars(description = "Optional features (e.g., ['macros', 'rt-multi-thread'])")]
+    pub features: Option<Vec<String>>,
+}
 
 pub struct DependencyManager;
 

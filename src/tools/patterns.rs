@@ -1,5 +1,14 @@
 // src/tools/patterns.rs
 use anyhow::Result;
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetPatternRequest {
+    #[schemars(description = "The topic to get a template for: 'tool', 'prompt', 'resource', or 'server_setup'")]
+    pub topic: String,
+}
 
 pub struct McpPatterns;
 

@@ -1,7 +1,20 @@
 // src/tools/surgeon.rs
 use std::path::PathBuf;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
 use tokio::fs;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct PatchFileRequest {
+    #[schemars(description = "Absolute path to the file")]
+    pub path: String,
+    #[schemars(description = "The exact code snippet to replace")]
+    pub original_snippet: String,
+    #[schemars(description = "The new code to insert")]
+    pub modified_snippet: String,
+}
 
 pub struct FileSurgeon;
 

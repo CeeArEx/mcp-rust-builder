@@ -1,6 +1,19 @@
 use std::path::PathBuf;
 use tokio::process::Command;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GitRequest {
+    #[schemars(description = "Project root path")]
+    pub path: String,
+    #[schemars(description = "Operation: 'status', 'diff', 'commit', 'undo'")]
+    pub operation: String,
+    #[schemars(description = "Commit message (required for 'commit')")]
+    pub message: Option<String>,
+}
 
 pub struct GitController;
 

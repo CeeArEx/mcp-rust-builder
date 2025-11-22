@@ -1,6 +1,15 @@
 use walkdir::WalkDir;
 use std::path::PathBuf;
 use anyhow::Result;
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct StructureRequest {
+    #[schemars(description = "Absolute path to the project root")]
+    pub path: String,
+}
 
 pub struct ProjectManager;
 

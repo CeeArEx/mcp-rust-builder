@@ -17,13 +17,25 @@ use rmcp::{
 };
 use rmcp::service::RequestContext;
 use serde::{Deserialize};
-use tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
-            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher};
-use tools::manual::SYSTEM_INSTRUCTIONS;
 use utils::RustPaths;
 use std::sync::Arc;
 use rmcp::handler::server::router::prompt::PromptRouter;
 use tokio::io::{stdin, stdout};
+
+use crate::tools::{CrateInfoProvider, RustDocsSearcher, CargoChecker, ErrorExplainer, ProjectManager,
+            DependencyManager, FileSurgeon, TestRunner, McpToolScaffolder, McpPatterns, GitController, CodePolisher};
+use crate::tools::manual::SYSTEM_INSTRUCTIONS;
+use crate::tools::search_docs::SearchDocsRequest;
+use crate::tools::cargo_check::CheckCodeRequest;
+use crate::tools::crate_info::GetCrateInfoRequest;
+use crate::tools::dependencies::AddDepRequest;
+use crate::tools::explain::ExplainRequest;
+use crate::tools::git::GitRequest;
+use crate::tools::patterns::GetPatternRequest;
+use crate::tools::project::StructureRequest;
+use crate::tools::scaffolder::ScaffoldToolRequest;
+use crate::tools::surgeon::PatchFileRequest;
+use crate::tools::testing::RunTestsRequest;
 
 #[derive(Clone)]
 pub struct RustBuilderServer {
@@ -50,55 +62,6 @@ impl Default for RustBuilderServer {
     }
 }
 
-#[derive(Deserialize, JsonSchema)]
-struct SearchDocsRequest {
-    #[schemars(description = "Search query (e.g., 'Vec', 'HashMap', 'async')")]
-    query: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct GetCrateInfoRequest {
-    #[schemars(description = "Name of the crate (e.g., 'serde', 'tokio', 'rmcp')")]
-    crate_name: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct CheckCodeRequest {
-    #[schemars(description = "Absolute path to the Rust project")]
-    path: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct ExplainRequest {
-    #[schemars(description = "Error code (e.g., 'E0308')")]
-    error_code: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct StructureRequest {
-    #[schemars(description = "Absolute path to the project root")]
-    path: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct AddDepRequest {
-    #[schemars(description = "Absolute path to the project root (where Cargo.toml is located)")]
-    project_path: String,
-    #[schemars(description = "Name of the crate (e.g., 'axum')")]
-    crate_name: String,
-    #[schemars(description = "Optional features (e.g., ['macros', 'rt-multi-thread'])")]
-    features: Option<Vec<String>>,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct PatchFileRequest {
-    #[schemars(description = "Absolute path to the file")]
-    path: String,
-    #[schemars(description = "The exact code snippet to replace")]
-    original_snippet: String,
-    #[schemars(description = "The new code to insert")]
-    modified_snippet: String,
-}
 
 #[derive(Deserialize, JsonSchema)]
 struct ReadFileRequest {
@@ -106,41 +69,7 @@ struct ReadFileRequest {
     path: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
-struct RunTestsRequest {
-    #[schemars(description = "Absolute path to the project root")]
-    path: String,
-    #[schemars(description = "Optional filter: Name of the test or module (e.g., 'tests::my_test')")]
-    filter: Option<String>,
-}
 
-#[derive(Deserialize, JsonSchema)]
-struct ScaffoldToolRequest {
-    #[schemars(description = "Absolute path to the project root")]
-    project_path: String,
-    #[schemars(description = "Name of the tool in snake_case (e.g., 'run_tests')")]
-    tool_name: String,
-    #[schemars(description = "Name of the struct in PascalCase (e.g., 'TestRunner')")]
-    struct_name: String,
-    #[schemars(description = "Short description of what the tool does")]
-    description: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct GetPatternRequest {
-    #[schemars(description = "The topic to get a template for: 'tool', 'prompt', 'resource', or 'server_setup'")]
-    topic: String,
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct GitRequest {
-    #[schemars(description = "Project root path")]
-    path: String,
-    #[schemars(description = "Operation: 'status', 'diff', 'commit', 'undo'")]
-    operation: String,
-    #[schemars(description = "Commit message (required for 'commit')")]
-    message: Option<String>,
-}
 
 #[derive(Deserialize, JsonSchema)]
 struct PolishRequest {

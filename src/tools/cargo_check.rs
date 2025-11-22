@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::path::PathBuf;
 use anyhow::Result;
+use rmcp::schemars;
+use rmcp::schemars::JsonSchema;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CheckCodeRequest {
+    #[schemars(description = "Absolute path to the Rust project")]
+    pub path: String,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CompilerMessage {

@@ -1,7 +1,22 @@
 use std::path::PathBuf;
 use anyhow::{Context, Result};
+use rmcp::schemars::JsonSchema;
+use serde::Deserialize;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+use rmcp::schemars;
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ScaffoldToolRequest {
+    #[schemars(description = "Absolute path to the project root")]
+    pub project_path: String,
+    #[schemars(description = "Name of the tool in snake_case (e.g., 'run_tests')")]
+    pub tool_name: String,
+    #[schemars(description = "Name of the struct in PascalCase (e.g., 'TestRunner')")]
+    pub struct_name: String,
+    #[schemars(description = "Short description of what the tool does")]
+    pub description: String,
+}
 
 pub struct McpToolScaffolder;
 

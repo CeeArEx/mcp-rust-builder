@@ -8,6 +8,8 @@ use serde::{Serialize, Deserialize};
 use anyhow::Result;
 use std::time::Instant;
 use std::sync::Arc;
+use rmcp::schemars::JsonSchema;
+use rmcp::schemars;
 use tokio::sync::RwLock;
 
 // --- Public Data Structures ---
@@ -18,6 +20,12 @@ pub struct DocSearchResult {
     pub description: String,
     pub path: String,
     pub relevance_score: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SearchDocsRequest {
+    #[schemars(description = "Search query (e.g., 'Vec', 'HashMap', 'async')")]
+    pub query: String,
 }
 
 // --- Internal Data Structures ---
